@@ -33,12 +33,12 @@ public class RateLimitingFilter extends OncePerRequestFilter {
             if (!isAllowed(clientId)) {
                 log.warn("Rate limit dépassé pour: {} depuis IP: {}", uri, clientId);
 
-                // Correction du bug : Utiliser le code numérique 429
                 response.setStatus(429); // Too Many Requests
                 response.setContentType("application/json");
                 response.setCharacterEncoding("UTF-8");
 
-                response.getWriter().write("{\"error\":\"Rate limit exceeded\",\"message\":\"Trop de requêtes, veuillez patienter\"}");
+                String errorResponse = "{\"success\":false,\"error\":\"Rate limit exceeded\",\"message\":\"Trop de requêtes, veuillez patienter\"}";
+                response.getWriter().write(errorResponse);
                 response.getWriter().flush();
                 return;
             }
