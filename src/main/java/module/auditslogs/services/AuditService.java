@@ -5,6 +5,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 import lombok.extern.slf4j.Slf4j;
 import module.auditslogs.constants.TypeThreatLevel;
+import module.auditslogs.dto.AuditEventRequest;
+import module.auditslogs.dto.SearchRequest;
 import module.auditslogs.entities.AuditLog;
 import module.auditslogs.entities.SecurityLog;
 import module.auditslogs.repositories.AuditLogRepository;
@@ -183,6 +185,53 @@ public class AuditService {
             log.debug("Impossible d'extraire l'ID de session: {}", e.getMessage());
             return "unknown-" + System.currentTimeMillis();
         }
+    }
+
+    public void logAuditEventFromApi(AuditEventRequest request) {
+        try {
+            AuditLog auditLog = AuditLog.builder()
+                    .timestamp(request.getTimestamp() != null ? request.getTimestamp() : LocalDateTime.now())
+                    .eventType(request.getEventType())
+                    .userEmail(request.getUserEmail())
+                    .details(request.getDetails())
+                    .ipAddress(request.getIpAddress())
+                    .userAgent(request.getUserAgent())
+                    .requestUri(request.getRequestUri())
+                    .httpMethod(request.getHttpMethod())
+                    .sessionId(request.getSessionId())
+                    .executionTime(request.getExecutionTime())
+                    .build();
+
+            auditLogRepository.save(auditLog);
+            log.info("Événement d'audit enregistré: {}", request.getEventType());
+
+        } catch (Exception e) {
+            log.error("Erreur lors de l'enregistrement de l'audit", e);
+            throw new RuntimeException("Erreur enregistrement audit", e);
+        }
+    }
+
+    public int processBatchEvents(Map<String, Object> batchRequest) {
+        // Logique pour traiter les événements en batch
+        return 0; // Nombre d'événements traités
+    }
+
+    public Map<String, Object> searchAuditLogs(SearchRequest searchRequest) {
+        // Logique de recherche
+        return new HashMap<>();
+    }
+
+    public Map<String, Object> exportLogs(LocalDateTime startDate, LocalDateTime endDate, String logType) {
+        // Logique d'export
+        return new HashMap<>();
+    }
+
+    public Map<String, Object> performHealthCheck() {
+        Map<String, Object> health = new HashMap<>();
+        health.put("status", "UP");
+        health.put("database", "UP");
+        health.put("timestamp", LocalDateTime.now());
+        return health;
     }
 
 }

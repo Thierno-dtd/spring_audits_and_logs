@@ -92,9 +92,7 @@ public class AuditInterceptor implements HandlerInterceptor {
             return false;
         }
 
-        return (uri.contains("/auth/") && !"GET".equals(method)) ||
-                (uri.contains("/admin/")) ||
-                (uri.contains("/users/") && !"GET".equals(method)) ||
+        return  (uri.contains("/users/") && !"GET".equals(method)) ||
                 ("POST".equals(method) || "PUT".equals(method) || "DELETE".equals(method));
     }
 
