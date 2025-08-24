@@ -1,0 +1,159 @@
+version: '3.8'
+
+services:
+  # ========================================
+  # APPLICATION AUDIT LOGS
+  # ========================================
+  audit-service:
+    build: .
+    container_name: audit-logs-api
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/audit_db
+      SPRING_DATASOURCE_USERNAME: audit_user
+      SPRING_DATASOURCE_PASSWORD: audit_password
+      AUDIT_ELK_ENABLED: "true"
+      AUDIT_ELK_LOGSTASH_URL: http://logstash:7001
+      AUDIT_SECURITY_API_KEY: ${AUDIT_SECURITY_API_KEY:-your-secret-api-key}
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      - postgres
+      - elasticsearch
+      - logstash
+    networks:
+      - audit-network
+    restart: unless-stopped
+
+  # ========================================
+  # POSTGRESQL DATABASE
+  # ========================================
+  postgres:
+    image: postgres:15
+    container_name: audit-postgres
+    environment:
+      POSTGRES_DB: audit_db
+      POSTGRES_USER: audit_user
+      POSTGRES_PASSWORD: audit_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    networks:
+      - audit-network
+    restart: unless-stopped
+
+  # ========================================
+  # ELASTICSEARCH
+  # ========================================
+  elasticsearch:
+    image: elasticsearch:8.11.0
+    container_name: audit-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - ./data/elasticsearch:/usr/share/elasticsearch/data
+    networks:
+      - audit-network
+    restart: unless-stopped
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+
+  # ========================================
+  # LOGSTASH
+  # ========================================
+  logstash:
+    image: logstash:8.11.0
+    container_name: audit-logstash
+    ports:
+      - "7001:7001"
+      - "5044:5044"
+    volumes:
+      - ./logstash/config:/usr/share/logstash/config
+      - ./logstash/pipeline:/usr/share/logstash/pipeline
+      - ./logs:/usr/share/logstash/logs
+    environment:
+      - LS_JAVA_OPTS=-Xmx1g -Xms1g
+    depends_on:
+      - elasticsearch
+    networks:
+      - audit-network
+    restart: unless-stopped
+
+  # ========================================
+  # KIBANA
+  # ========================================
+  kibana:
+    image: kibana:8.11.0
+    container_name: audit-kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - SERVER_NAME=kibana
+      - SERVER_HOST=0.0.0.0
+    ports:
+      - "5601:5601"
+    depends_on:
+      - elasticsearch
+    networks:
+      - audit-network
+    restart: unless-stopped
+
+  # ========================================
+  # NGINX REVERSE PROXY (Optional)
+  # ========================================
+  nginx:
+    image: nginx:alpine
+    container_name: audit-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - audit-service
+      - kibana
+    networks:
+      - audit-network
+    restart: unless-stopped
+
+  # ========================================
+  # REDIS (Optional - for advanced caching)
+  # ========================================
+  redis:
+    image: redis:alpine
+    container_name: audit-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
+    networks:
+      - audit-network
+    restart: unless-stopped
+
+# ========================================
+# NETWORKS
+# ========================================
+networks:
+  audit-network:
+    driver: bridge
+
+# ========================================
+# VOLUMES
+# ========================================
+volumes:
+  postgres-data:
+    driver: local
+  elasticsearch-data:
+    driver: local
+  redis-data:
+    driver: local

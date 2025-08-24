@@ -2,6 +2,7 @@ package module.auditslogs.controllers;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import module.auditslogs.constants.Utils;
 import module.auditslogs.dto.ApiResponse;
 import module.auditslogs.dto.AuditEventRequest;
 import module.auditslogs.dto.SearchRequest;
@@ -9,18 +10,16 @@ import module.auditslogs.dto.SecurityEventRequest;
 import module.auditslogs.services.AnalyticsService;
 import module.auditslogs.services.AuditService;
 import module.auditslogs.services.SecurityLogService;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
-import java.time.LocalDateTime;
-import java.util.Map;
+
 
 @RestController
-@RequestMapping("/api/v1/audit")
+@RequestMapping(Utils.AUDIT_API) // 🎯 Utilisation de la constante
 @RequiredArgsConstructor
 @Slf4j
 @Validated
@@ -30,206 +29,127 @@ public class AuditApiController {
     private final SecurityLogService securityLogService;
     private final AnalyticsService analyticsService;
 
-    // ========================================
-    // ENDPOINTS POUR ENREGISTREMENT DES ÉVÉNEMENTS
-    // ========================================
-
     /**
      * Enregistrer un événement d'audit
-     * POST /api/v1/audit/log
      */
-    @PostMapping("/log")
-    public ResponseEntity<ApiResponse<?>> logAuditEvent(@Valid @RequestBody AuditEventRequest request) {
+    @PostMapping("/log") // Ou utiliser Utils.AUDIT_LOG_ENDPOINT sans le préfixe
+    public ResponseEntity<ApiResponse<?>> logAuditEvent(
+            @Valid @RequestBody AuditEventRequest request,
+            HttpServletRequest httpRequest) {
+
         try {
-            log.info("📝 Réception événement audit: {} pour {}", request.getEventType(), request.getUserEmail());
+            // 🔍 Validation avec Utils
+            if (Utils.isEmpty(request.getEventType())) {
+                return ResponseEntity.badRequest()
+                        .body(ApiResponse.error(Utils.Messages.ERROR_VALIDATION));
+            }
+
+            // 🧹 Sanitisation pour les logs
+            String sanitizedDetails = Utils.sanitizeForLog(request.getDetails());
+            String sanitizedEmail = Utils.sanitizeForLog(request.getUserEmail());
+
+            log.info("📝 Réception événement audit: {} pour {}",
+                    request.getEventType(), sanitizedEmail);
+
+            // 🔧 Enrichissement avec des valeurs par défaut
+            if (Utils.isEmpty(request.getApplicationName())) {
+                request.setApplicationName("unknown-app");
+            }
 
             auditService.logAuditEventFromApi(request);
 
-            return ResponseEntity.ok(ApiResponse.success("Événement d'audit enregistré avec succès"));
+            return ResponseEntity.ok(ApiResponse.success(Utils.Messages.SUCCESS));
 
         } catch (Exception e) {
-            log.error("❌ Erreur enregistrement audit: {}", e.getMessage(), e);
+            log.error("❌ Erreur enregistrement audit: {}", Utils.sanitizeForLog(e.getMessage()), e);
             return ResponseEntity.internalServerError()
-                    .body(ApiResponse.error("Erreur lors de l'enregistrement de l'audit"));
+                    .body(ApiResponse.error(Utils.Messages.ERROR_INTERNAL));
         }
     }
 
     /**
      * Enregistrer un événement de sécurité
-     * POST /api/v1/audit/security
      */
     @PostMapping("/security")
-    public ResponseEntity<ApiResponse<?>> logSecurityEvent(@Valid @RequestBody SecurityEventRequest request) {
+    public ResponseEntity<ApiResponse<?>> logSecurityEvent(
+            @Valid @RequestBody SecurityEventRequest request,
+            HttpServletRequest httpRequest) {
+
         try {
-            log.warn("🔐 Réception événement sécurité: {} - Niveau: {}",
-                    request.getSecurityEvent(), request.getThreatLevel());
+            // 🚨 Log spécial pour événements critiques
+            if ("CRITICAL".equals(request.getThreatLevel())) {
+                log.error("🚨 ÉVÉNEMENT CRITIQUE: {} - {} - IP: {}",
+                        request.getSecurityEvent(),
+                        Utils.sanitizeForLog(request.getUserEmail()),
+                        request.getIpAddress());
+            }
 
             securityLogService.logSecurityEventFromApi(request);
 
-            return ResponseEntity.ok(ApiResponse.success("Événement de sécurité enregistré avec succès"));
+            return ResponseEntity.ok(ApiResponse.success(Utils.Messages.SUCCESS));
 
         } catch (Exception e) {
-            log.error("❌ Erreur enregistrement sécurité: {}", e.getMessage(), e);
+            log.error("❌ Erreur événement sécurité: {}", Utils.sanitizeForLog(e.getMessage()), e);
             return ResponseEntity.internalServerError()
-                    .body(ApiResponse.error("Erreur lors de l'enregistrement de l'événement de sécurité"));
+                    .body(ApiResponse.error(Utils.Messages.ERROR_INTERNAL));
         }
     }
 
     /**
-     * Enregistrement batch (pour performance)
-     * POST /api/v1/audit/batch
-     */
-    @PostMapping("/batch")
-    public ResponseEntity<ApiResponse<?>> logBatchEvents(@Valid @RequestBody Map<String, Object> batchRequest) {
-        try {
-            int processedEvents = auditService.processBatchEvents(batchRequest);
-
-            return ResponseEntity.ok(ApiResponse.success(
-                    String.format("%d événements traités avec succès", processedEvents)
-            ));
-
-        } catch (Exception e) {
-            log.error("❌ Erreur traitement batch: {}", e.getMessage(), e);
-            return ResponseEntity.internalServerError()
-                    .body(ApiResponse.error("Erreur lors du traitement batch"));
-        }
-    }
-
-    // ========================================
-    // ENDPOINTS DE RECHERCHE ET CONSULTATION
-    // ========================================
-
-    /**
-     * Recherche dans les logs d'audit
-     * GET /api/v1/audit/search
+     * Recherche avec validation des paramètres
      */
     @GetMapping("/search")
     public ResponseEntity<ApiResponse<?>> searchAuditLogs(@Valid SearchRequest searchRequest) {
         try {
+            // 🔍 Validation des limites
+            if (searchRequest.getSize() > Utils.Limits.MAX_PAGE_SIZE) {
+                searchRequest.setSize(Utils.Limits.MAX_PAGE_SIZE);
+            }
+
+            if (searchRequest.getSize() <= 0) {
+                searchRequest.setSize(Utils.Limits.DEFAULT_PAGE_SIZE);
+            }
+
             var results = auditService.searchAuditLogs(searchRequest);
             return ResponseEntity.ok(ApiResponse.success(results));
 
         } catch (Exception e) {
-            log.error("❌ Erreur recherche: {}", e.getMessage(), e);
+            log.error("❌ Erreur recherche: {}", Utils.sanitizeForLog(e.getMessage()), e);
             return ResponseEntity.internalServerError()
-                    .body(ApiResponse.error("Erreur lors de la recherche"));
+                    .body(ApiResponse.error(Utils.Messages.ERROR_INTERNAL));
         }
     }
 
     /**
-     * Dashboard principal avec métriques
-     * GET /api/v1/audit/dashboard
-     */
-    @GetMapping("/dashboard")
-    public ResponseEntity<ApiResponse<?>> getDashboard(
-            @RequestParam(defaultValue = "24") int hours) {
-        try {
-            var dashboardData = analyticsService.generateDashboard(hours);
-            return ResponseEntity.ok(ApiResponse.success(dashboardData));
-
-        } catch (Exception e) {
-            log.error("❌ Erreur génération dashboard: {}", e.getMessage(), e);
-            return ResponseEntity.internalServerError()
-                    .body(ApiResponse.error("Erreur lors de la génération du dashboard"));
-        }
-    }
-
-    /**
-     * Analyse de sécurité en temps réel
-     * GET /api/v1/audit/security/analysis
-     */
-    @GetMapping("/security/analysis")
-    public ResponseEntity<ApiResponse<?>> getSecurityAnalysis(
-            @RequestParam(defaultValue = "1") int hours) {
-        try {
-            var analysis = analyticsService.performSecurityAnalysis(hours);
-            return ResponseEntity.ok(ApiResponse.success(analysis));
-
-        } catch (Exception e) {
-            log.error("❌ Erreur analyse sécurité: {}", e.getMessage(), e);
-            return ResponseEntity.internalServerError()
-                    .body(ApiResponse.error("Erreur lors de l'analyse de sécurité"));
-        }
-    }
-
-    /**
-     * Export des logs pour compliance
-     * GET /api/v1/audit/export
-     */
-    @GetMapping("/export")
-    public ResponseEntity<ApiResponse<?>> exportLogs(
-            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime startDate,
-            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime endDate,
-            @RequestParam(defaultValue = "audit") String logType) {
-        try {
-            var exportData = auditService.exportLogs(startDate, endDate, logType);
-            return ResponseEntity.ok(ApiResponse.success(exportData));
-
-        } catch (Exception e) {
-            log.error("❌ Erreur export: {}", e.getMessage(), e);
-            return ResponseEntity.internalServerError()
-                    .body(ApiResponse.error("Erreur lors de l'export"));
-        }
-    }
-
-    // ========================================
-    // ENDPOINTS DE MONITORING
-    // ========================================
-
-    /**
-     * Health check détaillé
-     * GET /api/v1/audit/health
+     * Health check avec messages standardisés
      */
     @GetMapping("/health")
     public ResponseEntity<ApiResponse<?>> healthCheck() {
         try {
             var healthStatus = auditService.performHealthCheck();
-            return ResponseEntity.ok(ApiResponse.success(healthStatus));
+
+            // 🏥 Vérification du statut
+            boolean isHealthy = "UP".equals(healthStatus.get("status"));
+
+            if (isHealthy) {
+                return ResponseEntity.ok(ApiResponse.success(healthStatus));
+            } else {
+                return ResponseEntity.status(503)
+                        .body(ApiResponse.error("Service dégradé"));
+            }
 
         } catch (Exception e) {
-            log.error("❌ Erreur health check: {}", e.getMessage(), e);
+            log.error("❌ Health check échoué: {}", Utils.sanitizeForLog(e.getMessage()), e);
             return ResponseEntity.status(503)
-                    .body(ApiResponse.error("Service dégradé"));
+                    .body(ApiResponse.error("Service indisponible"));
         }
     }
 
     /**
-     * Métriques du service
-     * GET /api/v1/audit/metrics
+     * Validation d'API Key personnalisée
      */
-    @GetMapping("/metrics")
-    public ResponseEntity<ApiResponse<?>> getMetrics() {
-        try {
-            var metrics = analyticsService.getServiceMetrics();
-            return ResponseEntity.ok(ApiResponse.success(metrics));
-
-        } catch (Exception e) {
-            log.error("❌ Erreur métriques: {}", e.getMessage(), e);
-            return ResponseEntity.internalServerError()
-                    .body(ApiResponse.error("Erreur lors de la récupération des métriques"));
-        }
-    }
-
-    /**
-     * Alertes actives
-     * GET /api/v1/audit/alerts
-     */
-    @GetMapping("/alerts")
-    public ResponseEntity<ApiResponse<?>> getActiveAlerts() {
-        try {
-            var alerts = analyticsService.getActiveAlerts();
-            return ResponseEntity.ok(ApiResponse.success(alerts));
-
-        } catch (Exception e) {
-            log.error("❌ Erreur alertes: {}", e.getMessage(), e);
-            return ResponseEntity.internalServerError()
-                    .body(ApiResponse.error("Erreur lors de la récupération des alertes"));
-        }
+    private boolean isValidApiKey(HttpServletRequest request) {
+        String apiKey = request.getHeader(Utils.Headers.API_KEY);
+        return Utils.isNotEmpty(apiKey) && !"default-key".equals(apiKey);
     }
 }
-
-
-
-
-
-
